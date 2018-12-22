@@ -11,3 +11,7 @@ insert: ptrac.ko
 	sudo insmod ptrac.ko
 remove: ptrac.ko
 	sudo rmmod ptrac.ko
+test:
+	echo /etc/passwd 1 | sudo tee /sys/ptrac/filelist > /dev/null
+	cat /sys/ptrac/filelist
+	dmesg | tail
