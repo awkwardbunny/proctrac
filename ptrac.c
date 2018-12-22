@@ -4,6 +4,7 @@
 #include <linux/kobject.h>
 #include <linux/slab.h>
 #include <linux/ftrace.h>
+#include <linux/uaccess.h>
 
 #define HOOK(_name, _function, _original) \
 	{ \
@@ -28,11 +29,24 @@ MODULE_VERSION("0.1");
 
 typedef struct st_fcontrl fcontrl;
 typedef struct st_fcontrl {
-	char fn[32];
+	char fn[512];
 	int access;
 	fcontrl *next;
 } fcontrl;
 fcontrl *flist;
+
+static char *dup_fn(const char __user *filename){
+	char *kfn;
+	kfn = kmalloc(512, GFP_KERNEL);
+	if(!kfn)
+		return NULL;
+	if(strncpy_from_user(kfn, filename, 512) < 0){
+		kfree(kfn);
+		return NULL;
+	}
+	return kfn;
+
+}
 
 static asmlinkage long (*real_sys_open)(const char __user *filename, int flags, umode_t mode);
 static asmlinkage long fh_sys_open(const char __user *filename, int flags, umode_t mode){
@@ -42,8 +56,8 @@ static asmlinkage long fh_sys_open(const char __user *filename, int flags, umode
 	//printk("%s\n", filename);
 	//pr_debug("open() %p\n", filename);
 	//pr_debug("open() %c%c%c%c%c%c\n", filename[0], filename[1], filename[2], filename[3], filename[4]);
-	filename[0];
-	pr_debug("open() %c %p\n", filename[0], filename);
+	char *kfn = dup_fn(filename);
+	pr_debug("open() %p %s\n", filename, kfn);
 	
 	//while(fcp){
 	//	if(!strcmp(filename, fcp->fn)){
@@ -128,12 +142,12 @@ static ssize_t filelist_store(struct kobject *kobj, struct kobj_attribute *attr,
 	fcontrl *f;
 	fcontrl *fcp = flist;
 	fcontrl *prev = NULL;
-	char fn[32];
+	char fn[512];
 	int access = 0;
 	fcontrl *exists = NULL;
 
 	printk(KERN_INFO "PTRAC: Adding to filelist: %s", buf);
-	sscanf(buf, "%31s %d", fn, &access);
+	sscanf(buf, "%511s %d", fn, &access);
 
 	// Search if exists
 	while(fcp){
@@ -164,7 +178,7 @@ static ssize_t filelist_store(struct kobject *kobj, struct kobj_attribute *attr,
 	}else if(access){
 		// Create new fcontrl
 		f = (fcontrl *)kmalloc(sizeof(fcontrl), __GFP_FS);
-		strcpy(f->fn, fn);
+		strncpy(f->fn, fn, 511);
 		f->access = access;
 	
 		// Add to list
