@@ -51,22 +51,36 @@ static char *dup_fn(const char __user *filename){
 static asmlinkage long (*real_sys_open)(const char __user *filename, int flags, umode_t mode);
 static asmlinkage long fh_sys_open(const char __user *filename, int flags, umode_t mode){
 	long ret;
-	//fcontrl *fcp = flist;
+	fcontrl *fcp = flist;
 
 	//printk("%s\n", filename);
 	//pr_debug("open() %p\n", filename);
 	//pr_debug("open() %c%c%c%c%c%c\n", filename[0], filename[1], filename[2], filename[3], filename[4]);
 	char *kfn = dup_fn(filename);
-	pr_debug("open() %p %s\n", filename, kfn);
+	//int pid = task_pid_nr(current);
+	//pr_debug("PTRAC: %d is opening %s\n", pid, kfn);
 	
-	//while(fcp){
-	//	if(!strcmp(filename, fcp->fn)){
-	//		printk("%s\n", filename);
-	//		break;
-	//	}
-	//	fcp = fcp->next;
-	//}
-
+	while(fcp){
+		if(!strcmp(fcp->fn, kfn)){
+			printk(KERN_INFO "PTRAC: PID %d is opening %s in mode %o with following flags:\n", task_pid_nr(current), kfn, mode);
+			if(flags & O_APPEND)
+				printk("O_APPEND ");
+			if(flags & O_CLOEXEC)
+				printk("O_CLOEXEC ");
+			if(flags & O_CREAT)
+				printk("O_CREAT ");
+			if(flags & O_TRUNC)
+				printk("O_TRUNC ");
+			if(flags & O_RDONLY)
+				printk("O_RDONLY ");
+			if(flags & O_WRONLY)
+				printk("O_WRONLY ");
+			if(flags & O_RDWR)
+				printk("O_RDWR ");
+			break;
+		}
+		fcp = fcp->next;
+	}
 
 	ret = real_sys_open(filename, flags, mode);
 
