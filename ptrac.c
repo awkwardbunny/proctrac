@@ -3,6 +3,23 @@
 #include <linux/kernel.h>
 #include <linux/kobject.h>
 #include <linux/slab.h>
+#include <linux/ftrace.h>
+
+#define HOOK(_name, _function, _original) \
+	{ \
+		.name = (_name), \
+		.function = (_function), \
+		.original = (_original) \
+	}
+
+struct ftrace_hook {
+	const char *name;
+	void *function;
+	void *original;
+
+	unsigned long address;
+	struct ftrace_ops ops;
+};
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Brian Hong");
@@ -16,6 +33,83 @@ typedef struct st_fcontrl {
 	fcontrl *next;
 } fcontrl;
 fcontrl *flist;
+
+static asmlinkage long (*real_sys_open)(const char __user *filename, int flags, umode_t mode);
+static asmlinkage long fh_sys_open(const char __user *filename, int flags, umode_t mode){
+	long ret;
+	//fcontrl *fcp = flist;
+
+	//printk("%s\n", filename);
+	//pr_debug("open() %p\n", filename);
+	//pr_debug("open() %c%c%c%c%c%c\n", filename[0], filename[1], filename[2], filename[3], filename[4]);
+	filename[0];
+	pr_debug("open() %c %p\n", filename[0], filename);
+	
+	//while(fcp){
+	//	if(!strcmp(filename, fcp->fn)){
+	//		printk("%s\n", filename);
+	//		break;
+	//	}
+	//	fcp = fcp->next;
+	//}
+
+
+	ret = real_sys_open(filename, flags, mode);
+
+	return ret;
+}
+
+static struct ftrace_hook open_hook = HOOK("sys_open", fh_sys_open, &real_sys_open);
+
+static int resolve_hook_address(struct ftrace_hook *hook){
+	hook->address = kallsyms_lookup_name(hook->name);
+	if(!hook->address){
+		printk("unresolved symbol: %s\n", hook->name);
+		return -ENOENT;
+	}
+
+	*((unsigned long *) hook->original) = hook->address;
+	return 0;
+}
+
+static void notrace fh_ftrace_thunk(unsigned long ip, unsigned long parent_ip, struct ftrace_ops *ops, struct pt_regs *regs){
+	struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
+	if(!within_module(parent_ip, THIS_MODULE))
+		regs->ip = (unsigned long) hook->function;
+}
+
+int fh_install_hook (struct ftrace_hook *hook){
+	int err;
+	err = resolve_hook_address(hook);
+	if(err)
+		return err;
+	hook->ops.func = fh_ftrace_thunk;
+	hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS | FTRACE_OPS_FL_IPMODIFY;
+
+	err = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
+	if(err){
+		printk("ftrace_set_filter_ip() failed: %d\n", err);
+		return err;
+	}
+
+	err = register_ftrace_function(&hook->ops);
+	if(err){
+		printk("register_ftrace_function() failed: %d\n", err);
+		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0); 
+		return err;
+	}
+	return 0;
+}
+
+void fh_remove_hook(struct ftrace_hook *hook){
+	int err;
+	err = unregister_ftrace_function(&hook->ops);
+	if(err)
+		printk("unregister_ftrace_function() failed: %d\n", err);
+	err = ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+	if(err)
+		printk("ftrace_set_filter_ip() failed: %d\n", err);
+}
 
 static ssize_t filelist_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf){
 	fcontrl *fcp = flist;
@@ -101,6 +195,9 @@ static int __init ptrac_init(void){
 		return -1;
 	}
 
+	resolve_hook_address(&open_hook);
+	fh_install_hook(&open_hook);
+
 	return 0;
 }
 
@@ -117,6 +214,7 @@ static void __exit ptrac_exit(void){
 		flist = fcp;
 	}
 
+	fh_remove_hook(&open_hook);
 	printk(KERN_INFO "PTRAC: Module unloaded!\n");
 }
 
