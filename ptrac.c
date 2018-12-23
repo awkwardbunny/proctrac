@@ -33,6 +33,17 @@ typedef struct st_fcontrl {
 } fcontrl;
 fcontrl *flist = NULL;
 
+// Helper function to search through file linked list
+static int search_flist(char *filename){
+	fcontrl *fcp = flist;
+	while(fcp){
+		if(!strcmp(fcp->fn, filename))
+			return fcp->access;
+		fcp = fcp->next;
+	}
+	return 0;
+}
+
 // Definitions and functions for hooking
 struct ftrace_hook {
 	const char *name;
@@ -104,34 +115,28 @@ void remove_hook(struct ftrace_hook *hook){
 static asmlinkage long (*real_sys_open)(const char __user *filename, int flags, umode_t mode);
 static asmlinkage long hook_sys_open(const char __user *filename, int flags, umode_t mode){
 	long ret;
-	fcontrl *fcp = flist;
 	char *kfn = dup_fn(filename);
 	
-	while(fcp){
-		if(!strcmp(fcp->fn, kfn)){
-			printk(KERN_INFO "PTRAC: PID %d is opening %s in mode %o with following flags:\n", task_pid_nr(current), kfn, mode);
-			if(flags & O_APPEND)
-				printk("O_APPEND ");
-			if(flags & O_CLOEXEC)
-				printk("O_CLOEXEC ");
-			if(flags & O_CREAT)
-				printk("O_CREAT ");
-			if(flags & O_TRUNC)
-				printk("O_TRUNC ");
-			if(flags & O_RDONLY)
-				printk("O_RDONLY ");
-			if(flags & O_WRONLY)
-				printk("O_WRONLY ");
-			if(flags & O_RDWR)
-				printk("O_RDWR ");
-			break;
-		}
-		fcp = fcp->next;
+	if(search_flist(kfn)){
+		printk(KERN_INFO "PTRAC: PID %d is opening %s in mode %o with following flags:\n", task_pid_nr(current), kfn, mode);
+		if(flags & O_APPEND)
+			printk("O_APPEND ");
+		if(flags & O_CLOEXEC)
+			printk("O_CLOEXEC ");
+		if(flags & O_CREAT)
+			printk("O_CREAT ");
+		if(flags & O_TRUNC)
+			printk("O_TRUNC ");
+		if(flags & O_RDONLY)
+			printk("O_RDONLY ");
+		if(flags & O_WRONLY)
+			printk("O_WRONLY ");
+		if(flags & O_RDWR)
+			printk("O_RDWR ");
 	}
 	kfree(kfn);
 
 	ret = real_sys_open(filename, flags, mode);
-
 	return ret;
 }
 
