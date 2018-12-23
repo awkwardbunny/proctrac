@@ -27,25 +27,29 @@ static char *dup_fn(const char __user *filename){
 
 static long (*sys_getcwd)(char __user *buf, unsigned long size);
 static char *resolve_path(char *fn){
-	char *buf;
-	char *ffn;
+	char *buf, *buf2;
+	char *cwd;
 	int len;
 
+	// No need
 	if(fn[0] == '/')
 		return fn;
 
+	// Get cwd
 	buf = kmalloc(1024, GFP_KERNEL);
-	if(!buf)
-		return NULL;
+	if(!buf) return NULL;
+	cwd = d_path(&(current->fs->pwd), buf, 1024);
+	len = strlen(cwd);
 
-	// Get cwd and append
-	ffn = d_path(&(current->fs->pwd), buf, 1024);
-	//strcat(ffn, fn);
-	//len = strlen(ffn);
-	//printk("L: %d, CWD: %s, FN: %s\n", len, ffn, fn);
+	// Concatenate two halves
+	buf2 = kmalloc(1024, GFP_KERNEL);
+	strcpy(buf2, cwd); // cwd
+	buf2[len] = '/'; // '/'
+	strcpy(buf2+len+1, fn); // filename
 
-	//kfree(fn);
-	return fn;
+	kfree(buf);
+	kfree(fn);
+	return buf2;
 }
 
 // Definition of data structures to keep track of files
@@ -173,7 +177,6 @@ static asmlinkage long hook_sys_unlinkat(int dfd, const char __user *filename, i
 
 	kfn = dup_fn(filename);
 	kfn = resolve_path(kfn);
-	printk("%s\n", kfn);
 	if(search_flist(kfn)) printk(KERN_INFO "PTRAC: PID %d is unlinking %s\n", task_pid_nr(current), kfn);
 	kfree(kfn);
 
