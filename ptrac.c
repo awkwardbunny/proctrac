@@ -184,10 +184,28 @@ static asmlinkage long hook_sys_unlinkat(int dfd, const char __user *filename, i
 	return ret;
 }
 
+static asmlinkage long (*real_sys_rename)(const char __user *filename1, const char __user *filename2);
+static asmlinkage long hook_sys_rename(const char __user *filename1, const char __user *filename2){
+	long ret;
+	char *kfn1, *kfn2;
+
+	kfn1 = dup_fn(filename1);
+	kfn2 = dup_fn(filename2);
+	kfn1 = resolve_path(kfn1);
+	kfn2 = resolve_path(kfn2);
+	if(search_flist(kfn1) || search_flist(kfn2)) printk(KERN_INFO "PTRAC: PID %d is renaming %s to %s\n", task_pid_nr(current), kfn1, kfn2);
+	kfree(kfn1);
+	kfree(kfn2);
+
+	ret = real_sys_rename(filename1, filename2);
+	return ret;
+}
+
 // Hooks
 static struct ftrace_hook open_hook = HOOK(sys_open);
 static struct ftrace_hook unlink_hook = HOOK(sys_unlink);
 static struct ftrace_hook unlinkat_hook = HOOK(sys_unlinkat);
+static struct ftrace_hook rename_hook = HOOK(sys_rename);
 
 // Function handlers for filelist kobject attribute
 static ssize_t filelist_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf){
@@ -277,6 +295,7 @@ static int __init ptrac_init(void){
 	install_hook(&open_hook);
 	install_hook(&unlink_hook);
 	install_hook(&unlinkat_hook);
+	install_hook(&rename_hook);
 
 	return 0;
 }
@@ -287,6 +306,7 @@ static void __exit ptrac_exit(void){
 	remove_hook(&open_hook);
 	remove_hook(&unlink_hook);
 	remove_hook(&unlinkat_hook);
+	remove_hook(&rename_hook);
 
 	// Decrement reference counter for /sys/ptrac
 	kobject_put(kobj_ref);
