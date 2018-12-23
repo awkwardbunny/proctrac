@@ -30,10 +30,22 @@ static char *resolve_path(char *fn){
 	char *buf, *buf2;
 	char *cwd;
 	int len;
+	int offset = 0;
 
 	// No need
 	if(fn[0] == '/')
 		return fn;
+
+	while(fn[offset] == '.'){
+		if(fn[offset+1] == '.' && fn[offset+2] == '/')
+			//offset += 3;
+			// TODO: Remove top path
+			continue;
+		else if(fn[offset+1] == '/')
+			offset += 2;
+		else
+			break;
+	}
 
 	// Get cwd
 	buf = kmalloc(1024, GFP_KERNEL);
@@ -45,7 +57,7 @@ static char *resolve_path(char *fn){
 	buf2 = kmalloc(1024, GFP_KERNEL);
 	strcpy(buf2, cwd); // cwd
 	buf2[len] = '/'; // '/'
-	strcpy(buf2+len+1, fn); // filename
+	strcpy(buf2+len+1, fn+offset); // filename
 
 	kfree(buf);
 	kfree(fn);
@@ -201,11 +213,26 @@ static asmlinkage long hook_sys_rename(const char __user *filename1, const char 
 	return ret;
 }
 
+static asmlinkage long (*real_sys_execve)(const char __user *filename, const char __user *const __user *argv, const char __user *const __user *envp);
+static asmlinkage long hook_sys_execve(const char __user *filename, const char __user *const __user *argv, const char __user *const __user *envp){
+	long ret;
+	char *kfn;
+
+	kfn = dup_fn(filename);
+	kfn = resolve_path(kfn);
+	if(search_flist(kfn)) printk(KERN_INFO "PTRAC: PID %d is executing %s\n", task_pid_nr(current), kfn);
+	kfree(kfn);
+
+	ret = real_sys_execve(filename, argv, envp);
+	return ret;
+}
+
 // Hooks
 static struct ftrace_hook open_hook = HOOK(sys_open);
 static struct ftrace_hook unlink_hook = HOOK(sys_unlink);
 static struct ftrace_hook unlinkat_hook = HOOK(sys_unlinkat);
 static struct ftrace_hook rename_hook = HOOK(sys_rename);
+static struct ftrace_hook execve_hook = HOOK(sys_execve);
 
 // Function handlers for filelist kobject attribute
 static ssize_t filelist_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf){
@@ -296,6 +323,7 @@ static int __init ptrac_init(void){
 	install_hook(&unlink_hook);
 	install_hook(&unlinkat_hook);
 	install_hook(&rename_hook);
+	install_hook(&execve_hook);
 
 	return 0;
 }
@@ -307,6 +335,7 @@ static void __exit ptrac_exit(void){
 	remove_hook(&unlink_hook);
 	remove_hook(&unlinkat_hook);
 	remove_hook(&rename_hook);
+	remove_hook(&execve_hook);
 
 	// Decrement reference counter for /sys/ptrac
 	kobject_put(kobj_ref);
