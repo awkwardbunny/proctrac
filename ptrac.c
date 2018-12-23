@@ -5,6 +5,7 @@
 #include <linux/slab.h>
 #include <linux/ftrace.h>
 #include <linux/uaccess.h>
+#include <linux/fs_struct.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Brian Hong");
@@ -22,6 +23,29 @@ static char *dup_fn(const char __user *filename){
 		return NULL;
 	}
 	return kfn;
+}
+
+static long (*sys_getcwd)(char __user *buf, unsigned long size);
+static char *resolve_path(char *fn){
+	char *buf;
+	char *ffn;
+	int len;
+
+	if(fn[0] == '/')
+		return fn;
+
+	buf = kmalloc(1024, GFP_KERNEL);
+	if(!buf)
+		return NULL;
+
+	// Get cwd and append
+	ffn = d_path(&(current->fs->pwd), buf, 1024);
+	//strcat(ffn, fn);
+	//len = strlen(ffn);
+	//printk("L: %d, CWD: %s, FN: %s\n", len, ffn, fn);
+
+	//kfree(fn);
+	return fn;
 }
 
 // Definition of data structures to keep track of files
@@ -98,6 +122,7 @@ int install_hook (struct ftrace_hook *hook){
 		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0); 
 		return err;
 	}
+	printk(KERN_INFO "PTRAC: Installed hook on %s()\n", hook->name);
 	return 0;
 }
 
@@ -109,39 +134,57 @@ void remove_hook(struct ftrace_hook *hook){
 	err = ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
 	if(err)
 		printk("ftrace_set_filter_ip() failed: %d\n", err);
+	printk(KERN_INFO "PTRAC: Removed hook on %s()\n", hook->name);
 }
 
 // Hook definitions
 static asmlinkage long (*real_sys_open)(const char __user *filename, int flags, umode_t mode);
 static asmlinkage long hook_sys_open(const char __user *filename, int flags, umode_t mode){
 	long ret;
-	char *kfn = dup_fn(filename);
-	
-	if(search_flist(kfn)){
-		printk(KERN_INFO "PTRAC: PID %d is opening %s in mode %o with following flags:\n", task_pid_nr(current), kfn, mode);
-		if(flags & O_APPEND)
-			printk("O_APPEND ");
-		if(flags & O_CLOEXEC)
-			printk("O_CLOEXEC ");
-		if(flags & O_CREAT)
-			printk("O_CREAT ");
-		if(flags & O_TRUNC)
-			printk("O_TRUNC ");
-		if(flags & O_RDONLY)
-			printk("O_RDONLY ");
-		if(flags & O_WRONLY)
-			printk("O_WRONLY ");
-		if(flags & O_RDWR)
-			printk("O_RDWR ");
-	}
+	char *kfn;
+
+	kfn = dup_fn(filename);
+	kfn = resolve_path(kfn);
+	if(search_flist(kfn)) printk(KERN_INFO "PTRAC: PID %d is opening %s\n", task_pid_nr(current), kfn);
 	kfree(kfn);
 
 	ret = real_sys_open(filename, flags, mode);
 	return ret;
 }
 
+static asmlinkage long (*real_sys_unlink)(const char __user *filename);
+static asmlinkage long hook_sys_unlink(const char __user *filename){
+	long ret;
+	char *kfn;
+
+	kfn = dup_fn(filename);
+	kfn = resolve_path(kfn);
+	if(search_flist(kfn)) printk(KERN_INFO "PTRAC: PID %d is unlinking %s\n", task_pid_nr(current), kfn);
+	kfree(kfn);
+
+	ret = real_sys_unlink(filename);
+	return ret;
+}
+
+static asmlinkage long (*real_sys_unlinkat)(int dfd, const char __user *filename, int flag);
+static asmlinkage long hook_sys_unlinkat(int dfd, const char __user *filename, int flag){
+	long ret;
+	char *kfn;
+
+	kfn = dup_fn(filename);
+	kfn = resolve_path(kfn);
+	printk("%s\n", kfn);
+	if(search_flist(kfn)) printk(KERN_INFO "PTRAC: PID %d is unlinking %s\n", task_pid_nr(current), kfn);
+	kfree(kfn);
+
+	ret = real_sys_unlinkat(dfd, filename, flag);
+	return ret;
+}
+
 // Hooks
 static struct ftrace_hook open_hook = HOOK(sys_open);
+static struct ftrace_hook unlink_hook = HOOK(sys_unlink);
+static struct ftrace_hook unlinkat_hook = HOOK(sys_unlinkat);
 
 // Function handlers for filelist kobject attribute
 static ssize_t filelist_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf){
@@ -225,12 +268,22 @@ static int __init ptrac_init(void){
 		return -1;
 	}
 
+	sys_getcwd = (long (*)(char __user *buf, unsigned long size))kallsyms_lookup_name("sys_getcwd");
+
+	// Install hooks
 	install_hook(&open_hook);
+	install_hook(&unlink_hook);
+	install_hook(&unlinkat_hook);
 
 	return 0;
 }
 
 static void __exit ptrac_exit(void){
+
+	// Remove hooks
+	remove_hook(&open_hook);
+	remove_hook(&unlink_hook);
+	remove_hook(&unlinkat_hook);
 
 	// Decrement reference counter for /sys/ptrac
 	kobject_put(kobj_ref);
@@ -243,7 +296,6 @@ static void __exit ptrac_exit(void){
 		flist = fcp;
 	}
 
-	remove_hook(&open_hook);
 	printk(KERN_INFO "PTRAC: Module unloaded!\n");
 }
 
