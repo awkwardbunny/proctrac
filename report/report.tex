@@ -1,0 +1,105 @@
+%++++++++++++++++++++++++++++++++++++++++
+% Don't modify this section unless you know what you're doing!
+\documentclass[letterpaper,12pt]{article}
+\usepackage{tabularx} % extra features for tabular environment
+\usepackage{amsmath}  % improve math presentation
+\usepackage{graphicx} % takes care of graphic including machinery
+\usepackage[margin=1in,letterpaper]{geometry} % decreases margins
+\usepackage{cite} % takes care of citations
+\usepackage[final]{hyperref} % adds hyper links inside the generated pdf file
+\usepackage{indentfirst}
+\usepackage{listings}
+\usepackage[title]{appendix}
+\usepackage{color}
+\hypersetup{
+	colorlinks=true,       % false: boxed links; true: colored links
+	linkcolor=blue,        % color of internal links
+	citecolor=blue,        % color of links to bibliography
+	filecolor=magenta,     % color of file links
+	urlcolor=blue         
+}
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+%++++++++++++++++++++++++++++++++++++++++
+
+\linespread{1.2}
+
+\begin{document}
+
+\title{ProcTrac: Linux Kernel Module to Monitor and Track File Access}
+\author{B. S. Hong}
+\date{\today}
+\maketitle
+
+\begin{abstract}
+A Linux kernel module was built to keep a list of files to keep track of and raise/log an alert when a file in that list was accessed. In this project, this was accomplished by hooking into some system calls to raise an alert.
+\end{abstract}
+
+
+\section{Design}
+
+The design of this project is fairly simple and straightforward; on one end of the program, is an interface with the user via some means. Following the UNIX philosophy of ``everything is a file,'' it made sense to expose a file where the kernel module would keep its configuration (the list of files it would be monitoring for). On the other end, a handful of system calls would be hooked and whenever a syscall like \textit{open(3)} would be called, it would check the parameters against the list and raise an alert when there was a match.
+
+\section{Challenges}
+
+Despite its simpleness, there were quite a few challenges that I've ran into. Most of the problem arises from writing a Linux kernel itself and often the complexity of doing so. There are many tutorials online that show how to write a basic kernel module. This was fine, but as I tried to add functionality to the module, it proved very hard for several reasons. Firstly, there weren't as many guides or documentations on the exact subsystem or the exact function that I was looking for. To make that worse, the Linux kernel went through a major internal change on the 2.6 release. The entire linking system changed and moved from userspace to kernel space [?]. This caused half the guides to become outdated since the kernel symbols were no longer exported and even if you find the syscall table, it is also marked read-only. Another challenge was that it was just simply too different of an environment to learn to code for, especially if not well familiar with the kernel internals.
+
+After a bit of research, I found out about ftrace. Ftrace is a tracing utility directly built into the kernel. Using ftrace, I was able to install the function hooks. One of the issues that I had while coding this part is that debugging was very annoying; normally, there's a bug and your program just segfaults, terminates, or spits out and error. In the kernel space, when something goes wrong, the kernel would panic and halt. I would then have to perform a hard reset on my machine and also lose all the debugging info.
+
+Another really hard part was the user input part. Initially, I tried to create a config file like `\textit{/etc/ptrac.conf}'. The users would modify that file and when the kernel module gets loaded, it would read from that file. However, this proved to be harder than expected. To be fair, opening up files from the kernel is considered a really bad practice anyways, and it was rightfully difficult in attempts to dissuade bad coders to take that route. If you wish to, the commit history would show that I've written a bunch of helper functions like \textit{open}, \textit{write}, \textit{read}, \textit{close} to try to make this work, but could not get read/write to work correctly.
+
+The next thing attempted was to expose a \textit{sysfs} file. The \textit{sysfs} is a virtual filesystem provided by the kernel, very much like the \textit{/proc} or \textit{/dev} directories in a typical Linux system, that does not map to a real filesystem, but maps to the kernel memory, somehow. It basically exposes the kernel kobject models to userspace via a virtual filesystem. This part also had very little standard documentation and the guides that were found all used different functions and stuff. Eventually, I went through the kernel docs and was able to find and use the right functions to create a sysfs entry that the user and the module can communicate through.
+
+\section{Implementation}
+
+As described above in the previous section, the two main parts of the project are the hooking and the sysfs entry. Firstly, when the module is inserted, it creates a kobject and sysfs directory \textit{/sys/ptrac} (line 311). It then creates an `attribute` of that kobject just created, pointing to the two handler functions that would read and write from the sysfs file \textit{/sys/ptrac/filelist} (lines 302,314). `\_\_ATTR\_RW()' is a C macro included from \textit{linux/sysfs.h}. If inspected carefully, you may notice that \textit{filelist\_store} actually reads a string for filename and an int for access. This will be further discussed in the next section.
+
+There actually is a third part of the module which is internal, and that's the linked list that stores all the filepaths. After being read, the filename is then stored in the \textit{struct st\_fcontrl}, which is a node in a singly-linked list pointed to by \textit{flist}. The files are added onto this list through the function \textit{filelist\_store} and removed in either \textit{filelist\_store} when the access is 0 or when the kernel module is unloaded. The function \textit{filelist\_show} handles when a user process reads out the sysfs file; it simply traverses through the linked list and prints the access value and the full filepath.
+
+After the sysfs entry is setup, the module installs all the hooks defined in lines 231 to 235. Additional functions can be added by adding another of these lines and creating \textit{real\_sys\_name} and \textit{hook\_sys\_name} like I have with other functions. They also have to be installed and removed. The functions \textit{install\_hook}, \textit{ftrace\_hook}, \textit{register\_ftrace\_function}, \textit{remove\_hook}, \textit{resolve\_hook\_address}, and \textit{ftrace\_thunk} are all either wrapper or helper functions that actually deal with the hooks.
+
+In \textit{resolve\_hook\_address}, there is a call to \textit{kallsyms\_lookup\_name}. Since the kernel symbols are no longer statically exported, this is how the function addresses are dynamically resolved from its names.
+
+The hooks, when called, all do very similar things: they first check if the filename provided is in the list of filenames to be monitored. If it is, then it prints an alert with the PID of the process that is trying to access the file. It then calls the original, real syscall and returns the returned value. One thing I figured out working on this part was that the decl spec \textit{\_\_user} actually meant something. It meant that the data was in userspace, and that it should not be dereferenced directly. That is why the call to \textit{strncpy\_from\_user()} was necessary in \textit{dup\_fn}.
+
+Things were working fine, until I tested hooking \textit{sys\_execve}. I realized that the filename would be sometimes a relative path rather than a full path. That's what the function \textit{resolve\_path} was meant to fix. It would get the full filepath based on the current working directory of the current process. The easiest method to accomplish this seemed to be to just call the syscall \textit{sys\_getcwd} after finding out that calling syscalls are allowed while in kernel space. Once again, \textit{kallsyms\_lookup\_names} was used to try to resolve \textit{sys\_getcwd}, but the function just didn't work right. (I forgot to remove that line with \textit{sys\_getcwd}.) Anyways, the \textit{resolve\_path} function returns the full path in a new buffer, making sure to free all the old and intermediate buffers. (Another example of annoyance of using kernel functions: the usage for the function \textit{d\_path} was in the kernel source and had a ``NOTE'' which was actually pretty significant in its usage).
+
+\section{Future Possibilities}
+
+There were a few more things I wanted to add and a few more things that I could've added, but I'll list and explain them here.
+
+The previously mentioned `access' variable that gets read and stored along with the filename was supposed to be like the flags parameter. Different access values would keep track of different actions for that file. For example, access value of 1 may only keep track of \textit{open()} syscalls, or 2 may only keep track of removal of that file (\textit{unlink()} and \textit{unlinkat()}), and so on.
+
+Something I started to deal with but didn't quite cover everything was relative paths. In \textit{resolve\_path} it removes all the leading `./'s but nothing else. So anything that begins with a `../' or any dot/dot-dot directories in the middle would not be handled correctly and likely will not match any filenames during the search.
+
+Another possible feature of this module could be to actually not only monitor, but also deny certain actions. Upon looking up the filename and comparing the access values with the attempted action, the function hook can return an error value instead of calling the real syscall.
+
+\begin{appendices}
+\section{Source Code}
+The full project, including the Makefile, can be found on my GitHub page
+
+\url{https://github.com/awkwardbunny/proctrac}
+\lstinputlisting[language=C]{ptrac.c}
+\end{appendices}
+\end{document}
